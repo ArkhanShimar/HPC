@@ -4,7 +4,9 @@
 #include <stdint.h>
 #include <math.h>
 #include <cuda_runtime.h>
+extern "C" {
 #include "lodepng.h"
+}
 
 __device__ int grey(const unsigned char *image, long long x, long long y, unsigned width, unsigned height) {
     if (x < 0 || y < 0 || x >= width || y >= height) return 0; // Zero padding.
