@@ -1,0 +1,7 @@
+build/
+__pycache__/
+*.tmp
+evidence/*.mp4
+evidence/HPC_Report.docx
+evidence/screenshots/
+evidence/run_artifacts/
