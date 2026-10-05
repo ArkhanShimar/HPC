@@ -196,7 +196,7 @@ def task4():
                 for c in range(3):np.testing.assert_array_equal(actual[:,:,c],expected)
                 assert (actual[:,:,3]==255).all() and actual.shape==source.shape
         for path in files:verify(path)
-        passed('Gx, Gy and combined edges for all four inputs match the independent CPU reference pixel for pixel')
+        passed('Gx, Gy and combined edges for all supplied inputs match the independent CPU reference pixel for pixel')
         rng=np.random.default_rng(6005)
         for w,h in [(1,1),(1,9),(9,1),(17,19),(1025,3),(4,4)]:
             path=folder/f'random_{w}_{h}.png'
