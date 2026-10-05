@@ -27,9 +27,15 @@ __global__ void sobel_edges(const unsigned char *input, unsigned char *output, u
         }
     }
     int magnitude = (int)(sqrtf((float)(sx*sx+sy*sy)) + 0.5f);
-    unsigned char edge = (unsigned char)(magnitude > 255 ? 255 : magnitude);
-    output[i*4] = output[i*4+1] = output[i*4+2] = edge;
-    output[i*4+3] = 255; // Opaque edge map, including originally transparent pixels.
+    int values[3] = {sx < 0 ? -sx : sx, sy < 0 ? -sy : sy, magnitude};
+    size_t plane_bytes = (size_t)width*height*4;
+    // Keep signed gradients for the magnitude; visualise their absolute values.
+    for (int plane = 0; plane < 3; ++plane) {
+        unsigned char value = (unsigned char)(values[plane] > 255 ? 255 : values[plane]);
+        size_t p = (size_t)plane*plane_bytes+i*4;
+        output[p] = output[p+1] = output[p+2] = value;
+        output[p+3] = 255;
+    }
 }
 static int checked(cudaError_t code, const char *action) {
     if (code == cudaSuccess) return 1;
@@ -41,6 +47,7 @@ static int process_image(const char *filename) {
     size_t pixels = 0, bytes = 0, blocks = 0;
     cudaEvent_t start = NULL, stop = NULL; cudaDeviceProp properties;
     int status = 1; float ms = 0;
+    const char *suffixes[3] = {"_gx.png", "_gy.png", "_edges.png"};
     const char *base = strrchr(filename, '/'); base = base ? base+1 : filename;
     size_t name_length = strlen(base); char *out_name = NULL;
     if (name_length < 5 || strcmp(base+name_length-4, ".png")) { fprintf(stderr, "Expected a .png filename: %s\n", filename); return 1; }
@@ -49,14 +56,14 @@ static int process_image(const char *filename) {
     memcpy(out_name, base, name_length-4); strcpy(out_name+name_length-4, "_edges.png");
     error = lodepng_decode32_file(&input, &width, &height, filename);
     if (error) { fprintf(stderr, "%s: %s\n", filename, lodepng_error_text(error)); goto cleanup; }
-    if (!width || !height || (size_t)width > SIZE_MAX/(size_t)height/4) { fprintf(stderr, "Invalid image dimensions.\n"); goto cleanup; }
+    if (!width || !height || (size_t)width > SIZE_MAX/(size_t)height/12) { fprintf(stderr, "Invalid image dimensions.\n"); goto cleanup; }
     pixels = (size_t)width*height; bytes = pixels*4; blocks = (pixels+255)/256;
-    output = (unsigned char *)malloc(bytes);
+    output = (unsigned char *)malloc(bytes*3);
     if (!output) goto cleanup;
     if (!checked(cudaGetDeviceProperties(&properties, 0), "GPU properties")) goto cleanup;
     if (blocks > (size_t)properties.maxGridSize[0]) { fprintf(stderr, "Image exceeds grid limit.\n"); goto cleanup; }
     if (!checked(cudaMalloc((void **)&device_in, bytes), "Allocate input image") ||
-        !checked(cudaMalloc((void **)&device_out, bytes), "Allocate output image") ||
+        !checked(cudaMalloc((void **)&device_out, bytes*3), "Allocate three output images") ||
         !checked(cudaMemcpy(device_in, input, bytes, cudaMemcpyHostToDevice), "Copy image") ||
         !checked(cudaEventCreate(&start), "Create start event") ||
         !checked(cudaEventCreate(&stop), "Create stop event") ||
@@ -66,9 +73,13 @@ static int process_image(const char *filename) {
         !checked(cudaEventRecord(stop), "Record stop") ||
         !checked(cudaEventSynchronize(stop), "Wait for Sobel kernel") ||
         !checked(cudaEventElapsedTime(&ms, start, stop), "Measure kernel") ||
-        !checked(cudaMemcpy(output, device_out, bytes, cudaMemcpyDeviceToHost), "Copy edge map")) goto cleanup;
-    error = lodepng_encode32_file(out_name, output, width, height);
-    if (error) { fprintf(stderr, "%s: %s\n", out_name, lodepng_error_text(error)); goto cleanup; }
+        !checked(cudaMemcpy(output, device_out, bytes*3, cudaMemcpyDeviceToHost), "Copy gradient and edge maps")) goto cleanup;
+    for (int plane = 0; plane < 3; ++plane) {
+        strcpy(out_name+name_length-4, suffixes[plane]);
+        error = lodepng_encode32_file(out_name, output+(size_t)plane*bytes, width, height);
+        if (error) { fprintf(stderr, "%s: %s\n", out_name, lodepng_error_text(error)); goto cleanup; }
+        printf("Saved %s\n", out_name);
+    }
     printf("%s -> %s | %ux%u | %zu blocks x 256 | Kernel %.3f ms\n", filename, out_name, width, height, blocks, ms);
     status = 0;
 cleanup:

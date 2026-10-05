@@ -179,7 +179,9 @@ def sobel_reference(rgba):
     p=np.pad(grey,1)
     gx=-p[:-2,:-2]+p[:-2,2:]-2*p[1:-1,:-2]+2*p[1:-1,2:]-p[2:,:-2]+p[2:,2:]
     gy=-p[:-2,:-2]-2*p[:-2,1:-1]-p[:-2,2:]+p[2:,:-2]+2*p[2:,1:-1]+p[2:,2:]
-    return np.minimum(255,np.floor(np.sqrt(gx.astype(float)**2+gy.astype(float)**2)+.5)).astype(np.uint8)
+    magnitude=np.minimum(255,np.floor(np.sqrt(gx.astype(float)**2+gy.astype(float)**2)+.5)).astype(np.uint8)
+    return {'gx':np.minimum(255,np.abs(gx)).astype(np.uint8),
+            'gy':np.minimum(255,np.abs(gy)).astype(np.uint8),'edges':magnitude}
 
 def task4():
     exe=Path.cwd()/'sobel'
@@ -189,12 +191,12 @@ def task4():
         log=run(exe,files,folder)
         def verify(path):
             source=np.array(Image.open(path).convert('RGBA'))
-            actual=np.array(Image.open(folder/(path.stem+'_edges.png')).convert('RGBA'))
-            expected=sobel_reference(source)
-            for c in range(3):np.testing.assert_array_equal(actual[:,:,c],expected)
-            assert (actual[:,:,3]==255).all() and actual.shape==source.shape
+            for suffix,expected in sobel_reference(source).items():
+                actual=np.array(Image.open(folder/(path.stem+'_'+suffix+'.png')).convert('RGBA'))
+                for c in range(3):np.testing.assert_array_equal(actual[:,:,c],expected)
+                assert (actual[:,:,3]==255).all() and actual.shape==source.shape
         for path in files:verify(path)
-        passed('All four supplied/project images match an independent CPU Sobel reference pixel for pixel')
+        passed('Gx, Gy and combined edges for all four inputs match the independent CPU reference pixel for pixel')
         rng=np.random.default_rng(6005)
         for w,h in [(1,1),(1,9),(9,1),(17,19),(1025,3),(4,4)]:
             path=folder/f'random_{w}_{h}.png'
