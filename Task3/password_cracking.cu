@@ -38,31 +38,22 @@ static int checked(cudaError_t code, const char *action) {
 }
 static int run_gpu(const char *encrypted, char *plain, size_t count) {
     char *device_input = NULL, *device_output = NULL;
-    cudaEvent_t start = NULL, stop = NULL;
     cudaDeviceProp properties;
     int status = 1, threads = 128;
     size_t blocks = (count + threads - 1) / threads;
-    float ms = 0;
     if (!checked(cudaGetDeviceProperties(&properties, 0), "GPU properties")) goto cleanup;
     if (blocks > (size_t)properties.maxGridSize[0]) { fprintf(stderr, "Input exceeds the GPU grid limit.\n"); goto cleanup; }
     if (!checked(cudaMalloc((void **)&device_input, count*11), "Allocate encrypted passwords") ||
         !checked(cudaMalloc((void **)&device_output, count*5), "Allocate recovered passwords") ||
         !checked(cudaMemcpy(device_input, encrypted, count*11, cudaMemcpyHostToDevice), "Copy input") ||
-        !checked(cudaMemset(device_output, 0, count*5), "Clear output") ||
-        !checked(cudaEventCreate(&start), "Create start event") ||
-        !checked(cudaEventCreate(&stop), "Create stop event")) goto cleanup;
-    if (!checked(cudaEventRecord(start), "Record start")) goto cleanup;
+        !checked(cudaMemset(device_output, 0, count*5), "Clear output")) goto cleanup;
     recover_passwords<<<(unsigned)blocks, threads>>>(device_input, device_output, count);
     if (!checked(cudaGetLastError(), "Launch password kernel") ||
-        !checked(cudaEventRecord(stop), "Record stop") ||
-        !checked(cudaEventSynchronize(stop), "Wait for kernel") ||
-        !checked(cudaEventElapsedTime(&ms, start, stop), "Measure kernel") ||
+        !checked(cudaDeviceSynchronize(), "Wait for kernel") ||
         !checked(cudaMemcpy(plain, device_output, count*5, cudaMemcpyDeviceToHost), "Copy results")) goto cleanup;
     printf("GPU: %s | Passwords: %zu | Blocks: %zu | Threads/block: %d\n", properties.name, count, blocks, threads);
-    printf("Kernel time: %.3f ms\n", ms); status = 0;
+    status = 0;
 cleanup:
-    if (start && !checked(cudaEventDestroy(start), "Destroy start event")) status = 1;
-    if (stop && !checked(cudaEventDestroy(stop), "Destroy stop event")) status = 1;
     if (device_input && !checked(cudaFree(device_input), "Free input")) status = 1;
     if (device_output && !checked(cudaFree(device_output), "Free output")) status = 1;
     return status;

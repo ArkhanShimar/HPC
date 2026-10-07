@@ -5,11 +5,9 @@
 #include <stdint.h>
 #include <errno.h>
 #include <pthread.h>
-#include <time.h>
 
-#define BUCKETS 4096
-typedef struct Entry { char *word; size_t count; struct Entry *next; } Entry;
-typedef struct { Entry *buckets[BUCKETS]; } Table;
+typedef struct { char *word; size_t count; } Entry;
+typedef struct { Entry *entries; size_t used, capacity; } Table;
 typedef struct {
     const char *text;
     size_t length, next, chunk;
@@ -20,28 +18,34 @@ typedef struct { Work *work; Table table; size_t words, slices; int failed; } Wo
 static int word_char(unsigned char c) {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
 }
-static unsigned hash_word(const char *s) {
-    unsigned h = 5381;
-    while (*s) h = h * 33u + (unsigned char)*s++;
-    return h % BUCKETS;
-}
 static int add_word(Table *table, const char *word, size_t count) {
-    unsigned h = hash_word(word);
-    for (Entry *e = table->buckets[h]; e; e = e->next) {
-        if (strcmp(e->word, word) == 0) { e->count += count; return 1; }
+    for (size_t i = 0; i < table->used; ++i) {
+        if (strcmp(table->entries[i].word, word) == 0) {
+            table->entries[i].count += count;
+            return 1;
+        }
     }
-    Entry *e = malloc(sizeof(*e));
-    if (!e) return 0;
-    e->word = strdup(word);
-    if (!e->word) { free(e); return 0; }
-    e->count = count; e->next = table->buckets[h]; table->buckets[h] = e;
+    if (table->used == table->capacity) {
+        size_t capacity = table->capacity ? table->capacity * 2 : 16;
+        if (capacity < table->capacity || capacity > SIZE_MAX / sizeof(Entry)) return 0;
+        Entry *entries = malloc(capacity * sizeof(Entry));
+        if (!entries) return 0;
+        for (size_t i = 0; i < table->used; ++i) entries[i] = table->entries[i];
+        free(table->entries);
+        table->entries = entries;
+        table->capacity = capacity;
+    }
+    char *copy = malloc(strlen(word) + 1);
+    if (!copy) return 0;
+    strcpy(copy, word);
+    table->entries[table->used].word = copy;
+    table->entries[table->used].count = count;
+    table->used++;
     return 1;
 }
-static void free_table(Table *t) {
-    for (unsigned i = 0; i < BUCKETS; ++i) {
-        Entry *e = t->buckets[i];
-        while (e) { Entry *next = e->next; free(e->word); free(e); e = next; }
-    }
+static void free_table(Table *table) {
+    for (size_t i = 0; i < table->used; ++i) free(table->entries[i].word);
+    free(table->entries);
 }
 static void *count_words(void *arg) {
     Worker *worker = arg;
@@ -78,13 +82,6 @@ static void *count_words(void *arg) {
     }
     return NULL;
 }
-static int compare_entries(const void *a, const void *b) {
-    return strcmp((*(Entry *const *)a)->word, (*(Entry *const *)b)->word);
-}
-static double seconds(void) {
-    struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
-    return t.tv_sec + t.tv_nsec / 1e9;
-}
 int main(int argc, char **argv) {
     if (argc != 3) { fprintf(stderr, "Usage: %s input.txt threads\n", argv[0]); return 1; }
     char *tail; errno = 0; long requested = strtol(argv[2], &tail, 10);
@@ -112,9 +109,8 @@ int main(int argc, char **argv) {
     if (pthread_mutex_init(&work.lock, NULL)) { free(text); return 1; }
     Worker *workers = calloc(n, sizeof(*workers));
     pthread_t *threads = malloc(n * sizeof(*threads));
-    Table merged = {0}; Entry **sorted = NULL;
+    Table merged = {0};
     int status = 1; size_t made = 0, unique = 0, total = 0;
-    double started = seconds();
     if (!workers || !threads) goto cleanup;
     for (; made < n; ++made) {
         workers[made].work = &work;
@@ -126,33 +122,35 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < n; ++i) {
         if (workers[i].failed) { fprintf(stderr, "Not enough memory while counting.\n"); goto cleanup; }
         total += workers[i].words;
-        for (unsigned b = 0; b < BUCKETS; ++b)
-            for (Entry *e = workers[i].table.buckets[b]; e; e = e->next)
-                if (!add_word(&merged, e->word, e->count)) goto cleanup;
+        for (size_t j = 0; j < workers[i].table.used; ++j) {
+            Entry *entry = &workers[i].table.entries[j];
+            if (!add_word(&merged, entry->word, entry->count)) goto cleanup;
+        }
     }
-    for (unsigned b = 0; b < BUCKETS; ++b)
-        for (Entry *e = merged.buckets[b]; e; e = e->next) unique++;
-    sorted = malloc((unique ? unique : 1) * sizeof(*sorted));
-    if (!sorted) goto cleanup;
-    size_t k = 0;
-    for (unsigned b = 0; b < BUCKETS; ++b)
-        for (Entry *e = merged.buckets[b]; e; e = e->next) sorted[k++] = e;
-    qsort(sorted, unique, sizeof(*sorted), compare_entries);
-    double elapsed = seconds() - started;
+    unique = merged.used;
+    // Put the merged words in alphabetical order using insertion sort.
+    for (size_t i = 1; i < unique; ++i) {
+        Entry entry = merged.entries[i];
+        size_t j = i;
+        while (j > 0 && strcmp(merged.entries[j-1].word, entry.word) > 0) {
+            merged.entries[j] = merged.entries[j-1];
+            j--;
+        }
+        merged.entries[j] = entry;
+    }
     FILE *output = fopen("result.txt", "w");
     if (!output) { perror("result.txt"); goto cleanup; }
-    for (size_t i = 0; i < unique; ++i) fprintf(output, "%s\t%zu\n", sorted[i]->word, sorted[i]->count);
+    for (size_t i = 0; i < unique; ++i) fprintf(output, "%s\t%zu\n", merged.entries[i].word, merged.entries[i].count);
     int bad_write = ferror(output);
     if (fclose(output) || bad_write) { fprintf(stderr, "Could not write result.txt.\n"); goto cleanup; }
     printf("Words: %zu | Unique: %zu | Threads: %zu | Chunk bytes: %zu\n", total, unique, n, work.chunk);
-    printf("Count, merge and sort: %.6f s\n", elapsed);
     for (size_t i = 0; i < n; ++i)
         printf("Thread %zu: %zu slices, %zu words\n", i, workers[i].slices, workers[i].words);
     printf("Alphabetical frequencies saved to result.txt\n");
     status = 0;
 cleanup:
     if (workers) for (size_t i = 0; i < n; ++i) free_table(&workers[i].table);
-    free_table(&merged); free(sorted); free(workers); free(threads); free(text);
+    free_table(&merged); free(workers); free(threads); free(text);
     pthread_mutex_destroy(&work.lock);
     return status;
 }

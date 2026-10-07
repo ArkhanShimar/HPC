@@ -9,7 +9,6 @@
 
 typedef struct { int rows, cols; double *data; } Matrix;
 static size_t line_number;
-static double compute_seconds;
 
 // Read a physical line so a missing value cannot be taken from the next row.
 static int read_line(FILE *fp, char **out) {
@@ -98,7 +97,6 @@ static int operation(FILE *out, const Matrix *a, const Matrix *b, int op, int re
     Matrix result = {0};
     if (!allocate(&result, rows, cols)) { fprintf(stderr, "Result allocation failed.\n"); return 0; }
     int threads = requested < rows ? requested : rows;
-    double start = omp_get_wtime();
     // Each iteration owns one complete output row; no shared accumulator is needed.
     #pragma omp parallel for num_threads(threads) schedule(static)
     for (int r = 0; r < rows; ++r) {
@@ -116,7 +114,6 @@ static int operation(FILE *out, const Matrix *a, const Matrix *b, int op, int re
             }
         }
     }
-    compute_seconds += omp_get_wtime() - start;
     printf("  %s: %dx%d, thread limit %d\n", names[op], rows, cols, threads);
     write_matrix(out, names[op], &result); free(result.data);
     return !ferror(out);
@@ -129,8 +126,8 @@ int main(int argc, char **argv) {
     }
     FILE *input = fopen(argv[1], "r");
     if (!input) { perror(argv[1]); return 1; }
-    FILE *out = fopen("results.txt.tmp", "w");
-    if (!out) { perror("results.txt.tmp"); fclose(input); return 1; }
+    FILE *out = fopen("results.txt", "w");
+    if (!out) { perror("results.txt"); fclose(input); return 1; }
     Matrix a = {0}, b = {0}; int status = 1, pairs = 0, rc;
     omp_set_dynamic(0);
     while ((rc = read_matrix(input, &a)) == 1) {
@@ -148,10 +145,7 @@ cleanup:
     free(a.data); free(b.data);
     if (fclose(input)) status = 1;
     if (fclose(out)) status = 1;
-    if (!status) {
-        if (rename("results.txt.tmp", "results.txt")) { perror("results.txt"); status = 1; }
-        else printf("Processed %d pairs. Compute time: %.6f s. Saved results.txt\n", pairs, compute_seconds);
-    }
-    if (status) remove("results.txt.tmp");
+    if (!status) printf("Processed %d pairs. Saved results.txt\n", pairs);
+    if (status) remove("results.txt");
     return status;
 }

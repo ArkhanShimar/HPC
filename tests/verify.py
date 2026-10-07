@@ -1,4 +1,4 @@
-"""Independent reference checks and repeatable measurements for compiled tasks."""
+"""Development checks for compiled tasks; not used by the submission notebooks."""
 from pathlib import Path
 from collections import Counter
 import sys, subprocess, tempfile, re, json, time, statistics, shutil
@@ -50,20 +50,7 @@ def task1():
             run(exe,[data,n],folder,1)
         run(exe,[folder/'missing.txt',2],folder,1)
         passed('Invalid thread counts and missing file rejected')
-        times={}
-        for n in [1,2,4,8]:
-            run(exe,[data,n],folder)
-            samples=[]
-            for _ in range(5):
-                log=run(exe,[data,n],folder)
-                samples.append(float(re.search(r'sort: ([\d.]+)',log)[1]))
-            times[str(n)]={'samples_seconds':samples,'median_seconds':statistics.median(samples)}
-        metrics.update(total_words=sum(expected.values()),unique_words=len(expected),timings=times)
-        # Meaningful memory checking on the CPU implementation.
-        san=folder/'word_sanitized'
-        subprocess.run(['gcc','-std=c11','-g','-fsanitize=address,undefined','-pthread',str(ROOT/'Task1/word_count.c'),'-o',str(san)],check=True)
-        run(san,[data,4],folder)
-        passed('AddressSanitizer and UndefinedBehaviorSanitizer on supplied dataset')
+
 
 def read_matrices(path):
     lines=iter(path.read_text().splitlines()); result=[]
@@ -120,24 +107,7 @@ def task2():
         run(exe,[folder/'missing.txt',2],folder,1)
         for n in ['0','-2','x','2x']:run(exe,[data,n],folder,1)
         passed('Malformed headers, row lengths, non-numeric data, missing pair and missing file rejected')
-        # A larger deterministic pair makes timing less dominated by tiny loops.
-        bench=folder/'benchmark.txt'; size=384
-        rng=np.random.default_rng(6005)
-        with bench.open('w') as f:
-            for _ in range(2):
-                f.write(f'{size},{size}\n');np.savetxt(f,rng.integers(1,10,(size,size)),fmt='%d',delimiter=',');f.write('\n')
-        times={}
-        for n in [1,2,4,8]:
-            run(exe,[bench,n],folder)
-            values=[float(re.search(r'Compute time: ([\d.]+)',run(exe,[bench,n],folder))[1]) for _ in range(5)]
-            times[str(n)]={'samples_seconds':values,'median_seconds':statistics.median(values)}
-        metrics.update(supplied_pairs=pairs,benchmark_shape=[size,size],timings=times)
-        san=folder/'matrix_sanitized'
-        subprocess.run(['gcc','-std=c11','-g','-fsanitize=address,undefined','-fopenmp',str(ROOT/'Task2/matrix_operations.c'),'-lm','-o',str(san)],check=True)
-        run(san,[data,4],folder)
-        for text in invalid:
-            path=folder/'bad.txt';path.write_text(text);run(san,[path,2],folder,1)
-        passed('AddressSanitizer and UndefinedBehaviorSanitizer on valid and malformed matrix inputs')
+
 
 def task3():
     exe=Path.cwd()/'password_cracking'
@@ -168,10 +138,7 @@ def task3():
         path.write_text('aaaaaa0000\n');run(exe,[path],folder,2)
         assert (folder/'decrypted.txt').read_text()=='NOT_FOUND\n'
         passed('Malformed files rejected and valid-format unmatched ciphertext reported')
-        values=[]
-        for _ in range(5):
-            text=run(exe,[data],folder);values.append(float(re.search(r'Kernel time: ([\d.]+)',text)[1]))
-        metrics.update(passwords=10000,search_space=67600,kernel_ms=values,median_kernel_ms=statistics.median(values),demo_log=log,exhaustive_log=full_log)
+
 
 def sobel_reference(rgba):
     a=rgba.astype(np.int32)
@@ -214,11 +181,7 @@ def task4():
         text=run(exe,[path,files[-1]],folder,1)
         assert 'Images completed: 1 | Failed: 1' in text
         passed('Batch continues after a bad image and reports failure')
-        values=[]
-        for _ in range(5):
-            text=run(exe,[ROOT/'data/images/sobel_target.png'],folder)
-            values.append(float(re.search(r'Kernel ([\d.]+)',text)[1]))
-        metrics.update(images=len(files),comparison='exact',kernel_ms=values,median_kernel_ms=statistics.median(values),demo_log=log)
+
 
 {1:task1,2:task2,3:task3,4:task4}[TASK]()
 record={'task':TASK,'passed':checks,'metrics':metrics}

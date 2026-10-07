@@ -45,8 +45,8 @@ static int process_image(const char *filename) {
     unsigned char *input = NULL, *output = NULL, *device_in = NULL, *device_out = NULL;
     unsigned width = 0, height = 0, error;
     size_t pixels = 0, bytes = 0, blocks = 0;
-    cudaEvent_t start = NULL, stop = NULL; cudaDeviceProp properties;
-    int status = 1; float ms = 0;
+    cudaDeviceProp properties;
+    int status = 1;
     const char *suffixes[3] = {"_gx.png", "_gy.png", "_edges.png"};
     const char *base = strrchr(filename, '/'); base = base ? base+1 : filename;
     size_t name_length = strlen(base); char *out_name = NULL;
@@ -64,15 +64,10 @@ static int process_image(const char *filename) {
     if (blocks > (size_t)properties.maxGridSize[0]) { fprintf(stderr, "Image exceeds grid limit.\n"); goto cleanup; }
     if (!checked(cudaMalloc((void **)&device_in, bytes), "Allocate input image") ||
         !checked(cudaMalloc((void **)&device_out, bytes*3), "Allocate three output images") ||
-        !checked(cudaMemcpy(device_in, input, bytes, cudaMemcpyHostToDevice), "Copy image") ||
-        !checked(cudaEventCreate(&start), "Create start event") ||
-        !checked(cudaEventCreate(&stop), "Create stop event") ||
-        !checked(cudaEventRecord(start), "Record start")) goto cleanup;
+        !checked(cudaMemcpy(device_in, input, bytes, cudaMemcpyHostToDevice), "Copy image")) goto cleanup;
     sobel_edges<<<(unsigned)blocks, 256>>>(device_in, device_out, width, height);
     if (!checked(cudaGetLastError(), "Launch Sobel kernel") ||
-        !checked(cudaEventRecord(stop), "Record stop") ||
-        !checked(cudaEventSynchronize(stop), "Wait for Sobel kernel") ||
-        !checked(cudaEventElapsedTime(&ms, start, stop), "Measure kernel") ||
+        !checked(cudaDeviceSynchronize(), "Wait for Sobel kernel") ||
         !checked(cudaMemcpy(output, device_out, bytes*3, cudaMemcpyDeviceToHost), "Copy gradient and edge maps")) goto cleanup;
     for (int plane = 0; plane < 3; ++plane) {
         strcpy(out_name+name_length-4, suffixes[plane]);
@@ -80,11 +75,9 @@ static int process_image(const char *filename) {
         if (error) { fprintf(stderr, "%s: %s\n", out_name, lodepng_error_text(error)); goto cleanup; }
         printf("Saved %s\n", out_name);
     }
-    printf("%s -> %s | %ux%u | %zu blocks x 256 | Kernel %.3f ms\n", filename, out_name, width, height, blocks, ms);
+    printf("%s -> %s | %ux%u | %zu blocks x 256\n", filename, out_name, width, height, blocks);
     status = 0;
 cleanup:
-    if (start && !checked(cudaEventDestroy(start), "Destroy start event")) status = 1;
-    if (stop && !checked(cudaEventDestroy(stop), "Destroy stop event")) status = 1;
     if (device_in && !checked(cudaFree(device_in), "Free device input")) status = 1;
     if (device_out && !checked(cudaFree(device_out), "Free device output")) status = 1;
     free(input); free(output); free(out_name); return status;
